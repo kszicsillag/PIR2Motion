@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Linq;
 using System.Collections.Generic;
+using System.Net.NetworkInformation;
 
 namespace PIR2Motion
 {
@@ -73,8 +74,11 @@ namespace PIR2Motion
         private readonly ILogger logger;
         private Process proc;
         private readonly IPIRService pirsvc;
-        private bool stop;
+        private bool stop=false;
         private readonly IOptions<MotionDetectionConfig> mdCfg;
+        private const int MIN_CLIP_COUNT= 2;
+        private const string EXTENSION = ".mkv";
+        Task bt;
 
         public ProcessMan(ILogger<ProcessMan> logger,
                           IPIRService pirsvc,
@@ -98,24 +102,29 @@ namespace PIR2Motion
             pirsvc.MotionAlert += Pirsvc_MotionAlert;
             pirsvc.MotionStop += Pirsvc_MotionStop;
             stop = false;
-            await Task.Run(() => MotionDetectionProc(dryrun:true));
-            this.logger.LogInformation(this.GetType().Name + " ready");
+            await (bt = Task.Run(() => MotionDetectionProc(dryrun: true)));
+            this.logger.LogInformation("Service ready");            
         }
 
         private async void Pirsvc_MotionAlert(object sender, EventArgs e)
         {
-            stop = false;
-            logger.LogInformation($"Motion registered");
-            await Task.Run(()=>MotionDetectionProc());                      
+            stop = false;            
+            if (bt == null || bt.IsCompleted)
+            {
+                logger.LogInformation($"Motion registered");
+                await (bt = Task.Run(() => MotionDetectionProc()));
+            }
+            else logger.LogWarning($"Motion signal overrun");
         }
 
         private void MotionDetectionProc(bool dryrun=false)
         {
             try
             {
-                while (!stop)
+                int count = 0;
+                while (!stop || count < MIN_CLIP_COUNT)
                 {
-                    string filename = $"v{DateTime.Now.ToString("yyyyMMddTHHmmss")}.mkv";
+                    string filename = $"v{(dryrun ? "x" : string.Empty)}{DateTime.Now.ToString("yyyyMMddTHHmmss")}{EXTENSION}";
                     string localPath = Path.Combine(mdCfg.Value.SaveFolder, filename);
                     ProcessStartInfo piRaspiVid = new ProcessStartInfo("/bin/sh", $"motionalert.sh {localPath} {filename}")
                     { UseShellExecute = false, RedirectStandardOutput = true };
@@ -124,19 +133,24 @@ namespace PIR2Motion
                     logger.LogInformation($"{nameof(piRaspiVid)}: {proc.StandardOutput.ReadToEnd()}");
                     proc.WaitForExit();
                     
-                    IEnumerable<FileInfo> fiToDelete = new DirectoryInfo(mdCfg.Value.SaveFolder).EnumerateFiles("*.mkv");
+                    IEnumerable<FileInfo> fiToDelete = new DirectoryInfo(mdCfg.Value.SaveFolder).EnumerateFiles($"*{EXTENSION}");
                     if (!dryrun)
+                    {
                         fiToDelete = fiToDelete.Where(fi => fi.CreationTime < DateTime.Now.AddDays(-7));
+                        count++;
+                    }
                     else
                     {
                         fiToDelete = fiToDelete.Where(fi => fi.Name == filename);
                         stop = true;
+                        count = int.MaxValue;
                     }
                     foreach (FileInfo fi in fiToDelete)
                     {
                         fi.Delete();
                         logger.LogInformation($"File {fi.FullName} deleted");
                     }
+
                 }
             }
             catch (Exception ex)
@@ -144,7 +158,7 @@ namespace PIR2Motion
                 logger.LogError(ex, "Error in motion alert loop");
                 if (dryrun)
                     throw;
-            }
+            }            
         }
 
         private void Pirsvc_MotionStop(object sender, EventArgs e)
@@ -183,7 +197,7 @@ namespace PIR2Motion
         {
             sensor = new Hcsr501(PIR_PIN, PinNumberingScheme.Logical);
             sensor.Hcsr501ValueChanged += Sensor_Hcsr501ValueChanged;
-            this.logger.LogInformation(this.GetType().Name + " ready");
+            this.logger.LogInformation("Service ready");
             return Task.CompletedTask;
         }
 

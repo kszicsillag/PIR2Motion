@@ -1,2 +1,2 @@
 #!/bin/bash
-raspivid -o -| tee $1 | rclone --config /etc/rclone/rclone.conf rcat OneDrive:Cam1/$2
+raspivid -vf -o -| tee $1 | rclone --config /etc/rclone/rclone.conf rcat OneDrive:Cam1/$2
