@@ -65,9 +65,7 @@ namespace PIR2Motion
 
     public class MotionDetectionConfig
     {
-        public string SaveFolder { get; set; }
-        public string CaptureExecutable { get; set; }
-        public string FmtCaptureExecutableArgs { get; set; }      
+        public string SaveFolder { get; set; } 
     }
 
     internal class ProcessMan : IHostedService, IDisposable
